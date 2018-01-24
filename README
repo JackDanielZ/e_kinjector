@@ -1,0 +1,5 @@
+Create /etc/modules-load.d/uinput.conf with content:
+uinput
+
+Create /etc/udev/rules.d/50-uinput.rules with content:
+KERNEL=="uinput", MODE="0666"
