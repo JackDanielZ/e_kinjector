@@ -19,15 +19,11 @@
 #include <Eina.h>
 #include <Ecore.h>
 #include <Ecore_Con.h>
+
 #include "e_mod_main.h"
+#include "keymap.h"
 
 #define _EET_ENTRY "config"
-
-typedef struct
-{
-   Eina_Stringshare *filename;
-   Eo *obj;
-} Item_Desc;
 
 typedef struct
 {
@@ -41,11 +37,231 @@ typedef struct
    Eina_List *items;
    Ecore_File_Monitor *config_dir_monitor;
    Eina_Stringshare *cfg_path;
+
+   int fd;
+   struct input_event ev;
+   Eina_Hash *keys_map;
 } Instance;
 
 #ifndef STAND_ALONE
 static E_Module *_module = NULL;
 #endif
+
+#define check_ret(ret) do{\
+     if (ret < 0) {\
+          printf("Error at %s:%d\n", __func__, __LINE__);\
+          return EINA_FALSE; \
+     }\
+} while(0)
+
+typedef struct
+{
+   Instance *instance;
+   Ecore_Timer *timer;
+   Eina_Stringshare *filename;
+   Eo *start_button;
+   Eina_Bool playing;
+   char *filedata;
+   char *cur_filedata;
+   char *cur_state;
+} Item_Desc;
+
+static Eina_Bool
+_configure_dev(Instance *inst)
+{
+   struct uinput_user_dev uidev;
+   char *str = alloca(100);
+   int ret;
+   unsigned int i;
+   memset(&uidev, 0, sizeof(uidev));
+
+   inst->fd = open("/dev/uinput", O_WRONLY);
+   check_ret(inst->fd);
+
+   snprintf(uidev.name, UINPUT_MAX_NAME_SIZE, "uinput-sample");
+
+   uidev.id.bustype = BUS_USB;
+   uidev.id.vendor  = 1;
+   uidev.id.product = 1;
+   uidev.id.version = 1;
+
+   ret = write(inst->fd, &uidev, sizeof(uidev));
+   if (ret != sizeof(uidev)) {
+        printf("Failed to write dev structure\n");
+        return EINA_FALSE;
+   }
+
+   ret = ioctl(inst->fd, UI_SET_EVBIT, EV_KEY);
+   check_ret(ret);
+
+   inst->keys_map = eina_hash_string_superfast_new(NULL);
+   for(i = 0; i < sizeof(kmap) / sizeof(*kmap); i++) {
+        memcpy(str, kmap[i].string, strlen(kmap[i].string) + 1);
+        eina_str_tolower(&str);
+        eina_hash_set(inst->keys_map, str, &(kmap[i]));
+        ret = ioctl(inst->fd, UI_SET_KEYBIT, kmap[i].kernelcode);
+        check_ret(ret);
+   }
+
+   ret = ioctl(inst->fd, UI_DEV_CREATE);
+   check_ret(ret);
+   return EINA_TRUE;
+}
+
+static Eina_Bool
+_send_event(Instance *inst, __u16 type, __u16 code, __s32 value)
+{
+   int ret;
+   memset(&inst->ev, 0, sizeof(inst->ev));
+
+   inst->ev.type = type;
+   inst->ev.code = code;
+   inst->ev.value = value;
+
+   ret = write(inst->fd, &inst->ev, sizeof(inst->ev));
+   check_ret(ret);
+   return EINA_TRUE;
+}
+
+static Eina_Bool _consume(void *data);
+
+static void
+_send_key(Item_Desc *idesc, int key, int state)
+{
+   _send_event(idesc->instance, EV_KEY, key, state);
+   _send_event(idesc->instance, EV_SYN, SYN_REPORT, 0);
+}
+
+static int
+_key_find_from_char(Instance *inst, char c)
+{
+   char str[2];
+   str[0] = tolower(c);
+   str[1] = '\0';
+   struct map *key = eina_hash_find(inst->keys_map, str);
+   if (!key)
+     {
+        fprintf(stderr, "Key not found for %c\n", c);
+        return -1;
+     }
+   return key->kernelcode;
+}
+
+static int
+_key_find_from_string(Instance *inst, const char *string, int len)
+{
+   char *str = alloca(len + 1);
+   memcpy(str, string, len);
+   str[len] = '\0';
+   eina_str_tolower(&str);
+   struct map *key = eina_hash_find(inst->keys_map, str);
+   if (!key)
+     {
+        fprintf(stderr, "Key not found for %s\n", str);
+        return -1;
+     }
+   return key->kernelcode;
+}
+
+#define WSKIP while (*idesc->cur_filedata == ' ') idesc->cur_filedata++;
+
+static Eina_Bool
+_consume(void *data)
+{
+   Item_Desc *idesc = data;
+   Instance *inst = idesc->instance;
+   if (*idesc->cur_filedata)
+     {
+        int down = 1;
+        while (*idesc->cur_filedata == '\n')
+          {
+             idesc->cur_filedata++;
+             idesc->cur_state = NULL;
+             WSKIP;
+          }
+        if (!strncmp(idesc->cur_state ? idesc->cur_state : idesc->cur_filedata, "KEY ", 4))
+          {
+             if (!idesc->cur_state)
+               {
+                  idesc->cur_state = idesc->cur_filedata;
+                  idesc->cur_filedata += 3;
+               }
+             if (*idesc->cur_filedata == ' ')
+               {
+                  WSKIP;
+                  char *end = idesc->cur_filedata;
+                  while (*end && *end != '\n' && *end != ' ') end++;
+                  int key = _key_find_from_string(inst, idesc->cur_filedata, end - idesc->cur_filedata);
+                  idesc->cur_filedata = end;
+                  _send_key(idesc, key, 1);
+                  _send_key(idesc, key, 0);
+                  //usleep(50000);
+                  ecore_timer_add(0.05, _consume, idesc);
+                  return EINA_FALSE;
+               }
+          }
+        if (!strncmp(idesc->cur_state ? idesc->cur_state : idesc->cur_filedata, "TYPE ", 5))
+          {
+             if (!idesc->cur_state)
+               {
+                  idesc->cur_state = idesc->cur_filedata;
+                  idesc->cur_filedata += 5;
+               }
+             char c = *idesc->cur_filedata;
+             int key = _key_find_from_char(inst, c);
+             idesc->cur_filedata++;
+             _send_key(idesc, key, 1);
+             _send_key(idesc, key, 0);
+             //usleep(50000);
+             ecore_timer_add(0.05, _consume, idesc);
+             return EINA_FALSE;
+          }
+        else if ((down = !strncmp(idesc->cur_state ? idesc->cur_state : idesc->cur_filedata, "KEY_DOWN ", 9)) ||
+              !strncmp(idesc->cur_state ? idesc->cur_state : idesc->cur_filedata, "KEY_UP ", 7))
+          {
+             if (!idesc->cur_state)
+               {
+                  idesc->cur_state = idesc->cur_filedata;
+                  idesc->cur_filedata += (down ? 8 : 6);
+               }
+             if (*idesc->cur_filedata == ' ')
+               {
+                  WSKIP;
+                  char *end = idesc->cur_filedata;
+                  while (*end && *end != '\n' && *end != ' ') end++;
+                  int key = _key_find_from_string(inst, idesc->cur_filedata, end - idesc->cur_filedata);
+                  idesc->cur_filedata = end;
+                  _send_key(idesc, key, down ? 1 : 0);
+                  //usleep(50000);
+                  ecore_timer_add(0.05, _consume, idesc);
+                  return EINA_FALSE;
+               }
+          }
+        else if (!strncmp(idesc->cur_filedata, "DELAY ", 6))
+          {
+             char *end = NULL;
+             idesc->cur_filedata += 6;
+             int d = strtol(idesc->cur_filedata, &end, 10);
+             idesc->cur_filedata = end;
+             WSKIP;
+             if (*idesc->cur_filedata && *idesc->cur_filedata != '\n')
+               {
+                  fprintf(stderr, "DELAY expects an integer representing milliseconds\n");
+                  return EINA_FALSE;
+               }
+             //usleep(d * 1000);
+             ecore_timer_add(d / 1000.0, _consume, idesc);
+             return EINA_FALSE;
+          }
+        else
+          {
+             fprintf(stderr, "Unknown token: %s\n", idesc->cur_filedata);
+             return EINA_FALSE;
+          }
+     }
+   return EINA_FALSE;
+}
+
 
 static Eo *
 _label_create(Eo *parent, const char *text, Eo **wref)
@@ -71,7 +287,7 @@ _button_create(Eo *parent, const char *text, Eo *icon, Eo **wref, Evas_Smart_Cb 
      {
         bt = elm_button_add(parent);
         evas_object_size_hint_align_set(bt, EVAS_HINT_FILL, EVAS_HINT_FILL);
-        evas_object_size_hint_weight_set(bt, EVAS_HINT_EXPAND, 0.0);
+        evas_object_size_hint_weight_set(bt, 0.0, 0.0);
         evas_object_show(bt);
         if (wref) efl_wref_add(bt, wref);
         if (cb_func) evas_object_smart_callback_add(bt, "clicked", cb_func, cb_data);
@@ -81,9 +297,73 @@ _button_create(Eo *parent, const char *text, Eo *icon, Eo **wref, Evas_Smart_Cb 
    return bt;
 }
 
-static void
-_start_pause_bt_clicked(void *data, Evas_Object *obj EINA_UNUSED, void *event_info EINA_UNUSED)
+static Eo *
+_icon_create(Eo *parent, const char *path, Eo **wref)
 {
+   Eo *ic = wref ? *wref : NULL;
+   if (!ic)
+     {
+        ic = elm_icon_add(parent);
+        elm_icon_standard_set(ic, path);
+        evas_object_show(ic);
+        if (wref) efl_wref_add(ic, wref);
+     }
+   return ic;
+}
+
+static char *
+_file_get_as_string(const char *filename)
+{
+   char *file_data = NULL;
+   int file_size;
+   FILE *fp = fopen(filename, "rb");
+   if (!fp)
+     {
+        fprintf(stderr, "Can not open file: \"%s\".", filename);
+        return NULL;
+     }
+
+   fseek(fp, 0, SEEK_END);
+   file_size = ftell(fp);
+   if (file_size == -1)
+     {
+        fclose(fp);
+        fprintf(stderr, "Can not ftell file: \"%s\".", filename);
+        return NULL;
+     }
+   rewind(fp);
+   file_data = (char *) calloc(1, file_size + 1);
+   if (!file_data)
+     {
+        fclose(fp);
+        fprintf(stderr, "Calloc failed");
+        return NULL;
+     }
+   int res = fread(file_data, file_size, 1, fp);
+   fclose(fp);
+   if (!res)
+     {
+        free(file_data);
+        file_data = NULL;
+        fprintf(stderr, "fread failed");
+     }
+   return file_data;
+}
+
+static void
+_start_stop_bt_clicked(void *data, Evas_Object *obj EINA_UNUSED, void *event_info EINA_UNUSED)
+{
+   Item_Desc *idesc = data;
+   idesc->playing = !idesc->playing;
+   elm_object_part_content_set(idesc->start_button, "icon",
+      _icon_create(idesc->start_button,
+         idesc->playing ? "media-playback-stop" : "media-playback-start", NULL));
+   if (idesc->playing)
+     {
+        idesc->filedata = _file_get_as_string(idesc->filename);
+        idesc->cur_filedata = idesc->filedata;
+        _consume(idesc);
+     }
 }
 
 static void
@@ -129,15 +409,26 @@ _box_update(Instance *inst, Eina_Bool clear)
 
    EINA_LIST_FOREACH(inst->items, itr, idesc)
      {
-        _label_create(inst->main_box, idesc->filename, &idesc->obj);
-        elm_box_pack_end(inst->main_box, idesc->obj);
+        Eo *b = elm_box_add(inst->main_box);
+        elm_box_horizontal_set(b, EINA_TRUE);
+        evas_object_size_hint_align_set(b, EVAS_HINT_FILL, EVAS_HINT_FILL);
+        evas_object_size_hint_weight_set(b, EVAS_HINT_EXPAND, 0.0);
+        evas_object_show(b);
+        elm_box_pack_end(inst->main_box, b);
+
+        Eo *o = _label_create(b, idesc->filename, NULL);
+        elm_box_pack_end(b, o);
+
+        _button_create(b, NULL, _icon_create(b, "media-playback-start", NULL),
+              &idesc->start_button, _start_stop_bt_clicked, idesc);
+        elm_box_pack_end(b, idesc->start_button);
      }
 }
 
 static void
 _config_dir_changed(void *data,
       Ecore_File_Monitor *em EINA_UNUSED,
-      Ecore_File_Event event, const char *path EINA_UNUSED)
+      Ecore_File_Event event EINA_UNUSED, const char *_path EINA_UNUSED)
 {
    Instance *inst = data;
    Eina_List *items = inst->items;
@@ -162,8 +453,11 @@ _config_dir_changed(void *data,
                }
              if (!found)
                {
+                  char path[1024];
+                  sprintf(path, "%s/%s", inst->cfg_path, file);
                   idesc = calloc(1, sizeof(*idesc));
-                  idesc->filename = eina_stringshare_add(file);
+                  idesc->instance = inst;
+                  idesc->filename = eina_stringshare_add(path);
                   inst->items = eina_list_append(inst->items, idesc);
                }
           }
@@ -202,6 +496,12 @@ _instance_create()
    if (!_mkdir(path)) return NULL;
    inst->cfg_path = eina_stringshare_add(path);
    inst->config_dir_monitor = ecore_file_monitor_add(path, _config_dir_changed, inst);
+
+   if (!_configure_dev(inst))
+     {
+        free(inst);
+        inst = NULL;
+     }
    return inst;
 }
 
