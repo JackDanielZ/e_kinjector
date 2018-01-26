@@ -66,6 +66,8 @@ typedef struct
    char *cur_state;
 } Item_Desc;
 
+static void _start_stop_bt_clicked(void *data, Evas_Object *obj, void *event_info);
+
 static Eina_Bool
 _configure_dev(Instance *inst)
 {
@@ -195,8 +197,7 @@ _consume(void *data)
                   idesc->cur_filedata = end;
                   _send_key(idesc, key, 1);
                   _send_key(idesc, key, 0);
-                  //usleep(50000);
-                  ecore_timer_add(0.05, _consume, idesc);
+                  idesc->timer = ecore_timer_add(0.05, _consume, idesc);
                   return EINA_FALSE;
                }
           }
@@ -212,8 +213,7 @@ _consume(void *data)
              idesc->cur_filedata++;
              _send_key(idesc, key, 1);
              _send_key(idesc, key, 0);
-             //usleep(50000);
-             ecore_timer_add(0.05, _consume, idesc);
+             idesc->timer = ecore_timer_add(0.05, _consume, idesc);
              return EINA_FALSE;
           }
         else if ((down = !strncmp(idesc->cur_state ? idesc->cur_state : idesc->cur_filedata, "KEY_DOWN ", 9)) ||
@@ -232,8 +232,7 @@ _consume(void *data)
                   int key = _key_find_from_string(inst, idesc->cur_filedata, end - idesc->cur_filedata);
                   idesc->cur_filedata = end;
                   _send_key(idesc, key, down ? 1 : 0);
-                  //usleep(50000);
-                  ecore_timer_add(0.05, _consume, idesc);
+                  idesc->timer = ecore_timer_add(0.05, _consume, idesc);
                   return EINA_FALSE;
                }
           }
@@ -249,16 +248,16 @@ _consume(void *data)
                   fprintf(stderr, "DELAY expects an integer representing milliseconds\n");
                   return EINA_FALSE;
                }
-             //usleep(d * 1000);
-             ecore_timer_add(d / 1000.0, _consume, idesc);
+             idesc->timer = ecore_timer_add(d / 1000.0, _consume, idesc);
              return EINA_FALSE;
           }
         else
           {
-             fprintf(stderr, "Unknown token: %s\n", idesc->cur_filedata);
-             return EINA_FALSE;
+             if (*idesc->cur_filedata)
+                fprintf(stderr, "Unknown token: %s\n", idesc->cur_filedata);
           }
      }
+   _start_stop_bt_clicked(idesc, NULL, NULL);
    return EINA_FALSE;
 }
 
@@ -353,7 +352,8 @@ _file_get_as_string(const char *filename)
 static void
 _start_stop_bt_clicked(void *data, Evas_Object *obj EINA_UNUSED, void *event_info EINA_UNUSED)
 {
-   Item_Desc *idesc = data;
+   Eina_List *itr;
+   Item_Desc *idesc = data, *idesc2;
    idesc->playing = !idesc->playing;
    elm_object_part_content_set(idesc->start_button, "icon",
       _icon_create(idesc->start_button,
@@ -363,6 +363,16 @@ _start_stop_bt_clicked(void *data, Evas_Object *obj EINA_UNUSED, void *event_inf
         idesc->filedata = _file_get_as_string(idesc->filename);
         idesc->cur_filedata = idesc->filedata;
         _consume(idesc);
+     }
+   else
+     {
+        ecore_timer_del(idesc->timer);
+        idesc->timer = NULL;
+     }
+   EINA_LIST_FOREACH(idesc->instance->items, itr, idesc2)
+     {
+        if (idesc2 != idesc)
+           elm_object_disabled_set(idesc2->start_button, idesc->playing);
      }
 }
 
