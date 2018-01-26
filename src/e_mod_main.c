@@ -59,6 +59,7 @@ typedef struct
    Instance *instance;
    Ecore_Timer *timer;
    Eina_Stringshare *filename;
+   Eina_Stringshare *name;
    Eo *start_button;
    Eina_Bool playing;
    char *filedata;
@@ -426,7 +427,7 @@ _box_update(Instance *inst, Eina_Bool clear)
         evas_object_show(b);
         elm_box_pack_end(inst->main_box, b);
 
-        Eo *o = _label_create(b, idesc->filename, NULL);
+        Eo *o = _label_create(b, idesc->name, NULL);
         elm_box_pack_end(b, o);
 
         _button_create(b, NULL, _icon_create(b, "media-playback-start", NULL),
@@ -468,6 +469,7 @@ _config_dir_changed(void *data,
                   idesc = calloc(1, sizeof(*idesc));
                   idesc->instance = inst;
                   idesc->filename = eina_stringshare_add(path);
+                  idesc->name = eina_stringshare_add_length(file, strlen(file) - 4);
                   inst->items = eina_list_append(inst->items, idesc);
                }
           }
