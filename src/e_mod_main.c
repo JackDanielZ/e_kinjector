@@ -363,10 +363,13 @@ _start_stop_bt_clicked(void *data, Evas_Object *obj EINA_UNUSED, void *event_inf
      {
         idesc->filedata = _file_get_as_string(idesc->filename);
         idesc->cur_filedata = idesc->filedata;
+        idesc->cur_state = NULL;
         _consume(idesc);
      }
    else
      {
+        free(idesc->filedata);
+        idesc->filedata = idesc->cur_filedata = NULL;
         ecore_timer_del(idesc->timer);
         idesc->timer = NULL;
      }
@@ -455,10 +458,10 @@ _config_dir_changed(void *data,
              Eina_Bool found = EINA_FALSE;
              EINA_LIST_FOREACH_SAFE(items, itr, itr2, idesc)
                {
-                  if (!found && !strcmp(file, idesc->filename))
+                  if (!found && !strncmp(file, idesc->name, strlen(file) - 4))
                     {
                        found = EINA_TRUE;
-                       items = eina_list_remove_list(items, itr);
+                       items = eina_list_remove(items, idesc);
                        inst->items = eina_list_append(inst->items, idesc);
                     }
                }
@@ -475,12 +478,12 @@ _config_dir_changed(void *data,
           }
         free(file);
      }
+   _box_update(inst, EINA_TRUE);
    EINA_LIST_FREE(items, idesc)
      {
         eina_stringshare_del(idesc->filename);
         free(idesc);
      }
-   _box_update(inst, EINA_TRUE);
 }
 
 static Eina_Bool
