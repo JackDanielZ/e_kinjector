@@ -25,6 +25,8 @@
 
 #define _EET_ENTRY "config"
 
+#define DELAY 0.01
+
 typedef struct
 {
 #ifndef STAND_ALONE
@@ -198,7 +200,7 @@ _consume(void *data)
                   idesc->cur_filedata = end;
                   _send_key(idesc, key, 1);
                   _send_key(idesc, key, 0);
-                  idesc->timer = ecore_timer_add(0.05, _consume, idesc);
+                  idesc->timer = ecore_timer_add(DELAY, _consume, idesc);
                   return EINA_FALSE;
                }
           }
@@ -214,7 +216,7 @@ _consume(void *data)
              idesc->cur_filedata++;
              _send_key(idesc, key, 1);
              _send_key(idesc, key, 0);
-             idesc->timer = ecore_timer_add(0.05, _consume, idesc);
+             idesc->timer = ecore_timer_add(DELAY, _consume, idesc);
              return EINA_FALSE;
           }
         else if ((down = !strncmp(idesc->cur_state ? idesc->cur_state : idesc->cur_filedata, "KEY_DOWN ", 9)) ||
@@ -233,7 +235,7 @@ _consume(void *data)
                   int key = _key_find_from_string(inst, idesc->cur_filedata, end - idesc->cur_filedata);
                   idesc->cur_filedata = end;
                   _send_key(idesc, key, down ? 1 : 0);
-                  idesc->timer = ecore_timer_add(0.05, _consume, idesc);
+                  idesc->timer = ecore_timer_add(DELAY, _consume, idesc);
                   return EINA_FALSE;
                }
           }
