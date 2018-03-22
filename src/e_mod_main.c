@@ -381,37 +381,6 @@ _start_stop_bt_clicked(void *data, Evas_Object *obj EINA_UNUSED, void *event_inf
 }
 
 static void
-_file_tooltip_show(void *data EINA_UNUSED, Evas *e EINA_UNUSED, Evas_Object *obj, void *event_info EINA_UNUSED)
-{
-   elm_object_tooltip_show(obj);
-}
-
-static void
-_file_tooltip_hide(void *data EINA_UNUSED, Evas *e EINA_UNUSED, Evas_Object *obj, void *event_info EINA_UNUSED)
-{
-   elm_object_tooltip_hide(obj);
-}
-
-static void
-_tooltip_enable(Eo *obj, Eina_Bool enable)
-{
-   if (!obj) return;
-   elm_object_disabled_set(obj, enable);
-   if (enable)
-     {
-        evas_object_event_callback_add(obj, EVAS_CALLBACK_MOUSE_IN, _file_tooltip_show, NULL);
-        evas_object_event_callback_add(obj, EVAS_CALLBACK_MOUSE_OUT, _file_tooltip_hide, NULL);
-     }
-   else
-     {
-        elm_object_tooltip_text_set(obj, NULL);
-        elm_object_tooltip_hide(obj);
-        evas_object_event_callback_del_full(obj, EVAS_CALLBACK_MOUSE_IN, _file_tooltip_show, NULL);
-        evas_object_event_callback_del_full(obj, EVAS_CALLBACK_MOUSE_OUT, _file_tooltip_hide, NULL);
-     }
-}
-
-static void
 _box_update(Instance *inst, Eina_Bool clear)
 {
    Eina_List *itr;
