@@ -264,7 +264,7 @@ _consume(void *data)
    return EINA_FALSE;
 }
 
-
+#if 0
 static Eo *
 _label_create(Eo *parent, const char *text, Eo **wref)
 {
@@ -280,6 +280,7 @@ _label_create(Eo *parent, const char *text, Eo **wref)
    elm_object_text_set(label, text);
    return label;
 }
+#endif
 
 static Eo *
 _button_create(Eo *parent, const char *text, Eo *icon, Eo **wref, Evas_Smart_Cb cb_func, void *cb_data)
@@ -401,11 +402,9 @@ _box_update(Instance *inst, Eina_Bool clear)
         evas_object_show(b);
         elm_box_pack_end(inst->main_box, b);
 
-        Eo *o = _label_create(b, idesc->name, NULL);
-        elm_box_pack_end(b, o);
-
-        _button_create(b, NULL, _icon_create(b, "media-playback-start", NULL),
+        _button_create(b, idesc->name, NULL,
               &idesc->start_button, _start_stop_bt_clicked, idesc);
+        evas_object_size_hint_weight_set(idesc->start_button, EVAS_HINT_EXPAND, EVAS_HINT_EXPAND);
         elm_box_pack_end(b, idesc->start_button);
      }
 }
