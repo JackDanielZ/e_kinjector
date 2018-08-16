@@ -10,6 +10,7 @@
 #include <linux/uinput.h>
 #include <fcntl.h>
 #include <ctype.h>
+#include <syslog.h>
 
 #ifndef STAND_ALONE
 #include <e.h>
@@ -45,13 +46,20 @@ typedef struct
    Eina_Hash *keys_map;
 } Instance;
 
+#define PRINT(fmt, ...) \
+{ \
+   char pbuf[1000]; \
+   sprintf(pbuf, fmt"\n", ## __VA_ARGS__); \
+   syslog(LOG_NOTICE, pbuf); \
+}
+
 #ifndef STAND_ALONE
 static E_Module *_module = NULL;
 #endif
 
 #define check_ret(ret) do{\
      if (ret < 0) {\
-          printf("Error at %s:%d\n", __func__, __LINE__);\
+          PRINT("Error at %s:%d", __func__, __LINE__);\
           return EINA_FALSE; \
      }\
 } while(0)
@@ -92,7 +100,7 @@ _configure_dev(Instance *inst)
 
    ret = write(inst->fd, &uidev, sizeof(uidev));
    if (ret != sizeof(uidev)) {
-        printf("Failed to write dev structure\n");
+        PRINT("Failed to write dev structure");
         return EINA_FALSE;
    }
 
@@ -110,6 +118,7 @@ _configure_dev(Instance *inst)
 
    ret = ioctl(inst->fd, UI_DEV_CREATE);
    check_ret(ret);
+   PRINT("Init done");
    return EINA_TRUE;
 }
 
@@ -146,7 +155,7 @@ _key_find_from_char(Instance *inst, char c)
    struct map *key = eina_hash_find(inst->keys_map, str);
    if (!key)
      {
-        fprintf(stderr, "Key not found for %c\n", c);
+        PRINT("Key not found for %c", c);
         return -1;
      }
    return key->kernelcode;
@@ -162,7 +171,7 @@ _key_find_from_string(Instance *inst, const char *string, int len)
    struct map *key = eina_hash_find(inst->keys_map, str);
    if (!key)
      {
-        fprintf(stderr, "Key not found for %s\n", str);
+        PRINT("Key not found for %s", str);
         return -1;
      }
    return key->kernelcode;
@@ -201,6 +210,7 @@ _consume(void *data)
                   _send_key(idesc, key, 1);
                   _send_key(idesc, key, 0);
                   idesc->timer = ecore_timer_add(DELAY, _consume, idesc);
+                  PRINT("Key %d", key);
                   return EINA_FALSE;
                }
           }
@@ -217,6 +227,7 @@ _consume(void *data)
              _send_key(idesc, key, 1);
              _send_key(idesc, key, 0);
              idesc->timer = ecore_timer_add(DELAY, _consume, idesc);
+             PRINT("Type %c", c);
              return EINA_FALSE;
           }
         else if ((down = !strncmp(idesc->cur_state ? idesc->cur_state : idesc->cur_filedata, "KEY_DOWN ", 9)) ||
@@ -238,6 +249,7 @@ _consume(void *data)
                   idesc->timer = ecore_timer_add(DELAY, _consume, idesc);
                   return EINA_FALSE;
                }
+             PRINT("Key %s", down?"Down":"Up");
           }
         else if (!strncmp(idesc->cur_filedata, "DELAY ", 6))
           {
@@ -248,18 +260,20 @@ _consume(void *data)
              WSKIP;
              if (*idesc->cur_filedata && *idesc->cur_filedata != '\n')
                {
-                  fprintf(stderr, "DELAY expects an integer representing milliseconds\n");
+                  PRINT("DELAY expects an integer representing milliseconds");
                   return EINA_FALSE;
                }
              idesc->timer = ecore_timer_add(d / 1000.0, _consume, idesc);
+             PRINT("Delay %dms", d);
              return EINA_FALSE;
           }
         else
           {
              if (*idesc->cur_filedata)
-                fprintf(stderr, "Unknown token: %s\n", idesc->cur_filedata);
+                PRINT("Unknown token: %s", idesc->cur_filedata);
           }
      }
+   PRINT("Finishing consuming");
    _start_stop_bt_clicked(idesc, NULL, NULL);
    return EINA_FALSE;
 }
@@ -322,7 +336,7 @@ _file_get_as_string(const char *filename)
    FILE *fp = fopen(filename, "rb");
    if (!fp)
      {
-        fprintf(stderr, "Can not open file: \"%s\".", filename);
+        PRINT("Can not open file: \"%s\".", filename);
         return NULL;
      }
 
@@ -331,7 +345,7 @@ _file_get_as_string(const char *filename)
    if (file_size == -1)
      {
         fclose(fp);
-        fprintf(stderr, "Can not ftell file: \"%s\".", filename);
+        PRINT("Can not ftell file: \"%s\".", filename);
         return NULL;
      }
    rewind(fp);
@@ -339,7 +353,7 @@ _file_get_as_string(const char *filename)
    if (!file_data)
      {
         fclose(fp);
-        fprintf(stderr, "Calloc failed");
+        PRINT("Calloc failed");
         return NULL;
      }
    int res = fread(file_data, file_size, 1, fp);
@@ -348,7 +362,7 @@ _file_get_as_string(const char *filename)
      {
         free(file_data);
         file_data = NULL;
-        fprintf(stderr, "fread failed");
+        PRINT("fread failed");
      }
    return file_data;
 }
@@ -367,6 +381,7 @@ _start_stop_bt_clicked(void *data, Evas_Object *obj EINA_UNUSED, void *event_inf
         idesc->filedata = _file_get_as_string(idesc->filename);
         idesc->cur_filedata = idesc->filedata;
         idesc->cur_state = NULL;
+        PRINT("Beginning consuming %s", idesc->filename);
         _consume(idesc);
      }
    else
@@ -464,7 +479,7 @@ _mkdir(const char *dir)
         Eina_Bool success = ecore_file_mkdir(dir);
         if (!success)
           {
-             printf("Cannot create a config folder \"%s\"\n", dir);
+             PRINT("Cannot create a config folder \"%s\"", dir);
              return EINA_FALSE;
           }
      }
@@ -585,7 +600,7 @@ _gc_init(E_Gadcon *gc, const char *name, const char *id, const char *style)
 static void
 _gc_shutdown(E_Gadcon_Client *gcc)
 {
-//   printf("TRANS: In - %s\n", __FUNCTION__);
+//   printf("TRANS: In - %s", __FUNCTION__);
    _instance_delete(gcc->data);
 }
 
@@ -643,7 +658,7 @@ static const E_Gadcon_Client_Class _gc_class =
 EAPI void *
 e_modapi_init(E_Module *m)
 {
-//   printf("TRANS: In - %s\n", __FUNCTION__);
+//   printf("TRANS: In - %s", __FUNCTION__);
    ecore_init();
    ecore_con_init();
    ecore_con_url_init();
@@ -658,7 +673,7 @@ e_modapi_init(E_Module *m)
 EAPI int
 e_modapi_shutdown(E_Module *m EINA_UNUSED)
 {
-//   printf("TRANS: In - %s\n", __FUNCTION__);
+//   printf("TRANS: In - %s", __FUNCTION__);
    e_gadcon_provider_unregister(&_gc_class);
 
    _module = NULL;
@@ -687,6 +702,13 @@ int main(int argc, char **argv)
    elm_init(argc, argv);
 
    inst = _instance_create();
+   if (!inst)
+     {
+        PRINT("Failed to initialize the module\n"
+              "Did you add a rule in /etc/udev/rules.d/ to chmod 666 /dev/uinput?\n"
+              "Did you add uinput to the modules to load (/etc/modules-load.d/?");
+        goto end;
+     }
 
    Eo *win = elm_win_add(NULL, "KInjector", ELM_WIN_BASIC);
 
@@ -705,6 +727,7 @@ int main(int argc, char **argv)
    elm_run();
 
    _instance_delete(inst);
+end:
    elm_shutdown();
    ecore_con_shutdown();
    ecore_shutdown();
